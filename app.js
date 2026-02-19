@@ -1,5 +1,5 @@
-const SUPABASE_URL = "YOUR_SUPABASE_URL";
-const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+const SUPABASE_URL = "https://fwbhaqhwoxoklguarxyi.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3YmhhcWh3b3hva2xndWFyeHlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE1NDA1NjEsImV4cCI6MjA4NzExNjU2MX0.gzwEshgc3e_tH-yhSZUUZBlOinCiB4deidt9h76kQAM";
 
 const RACES_2026 = [
   "Australian Grand Prix",
@@ -80,7 +80,7 @@ const DRIVER_TEAMS_2026 = {
 
 const DRIVER_COUNT = DRIVERS_2026.length;
 
-let supabase = null;
+let supabaseClient = null;
 
 const userNameInput = document.getElementById("userName");
 const raceNameSelect = document.getElementById("raceName");
@@ -90,9 +90,51 @@ const refreshBtn = document.getElementById("refreshBtn");
 const statusEl = document.getElementById("status");
 const submissionsEl = document.getElementById("submissions");
 
+let draggedCard = null;
+
+function validateDomBindings() {
+  const missing = [];
+
+  if (!userNameInput) missing.push("#userName");
+  if (!raceNameSelect) missing.push("#raceName");
+  if (!driversGrid) missing.push("#driversGrid");
+  if (!saveBtn) missing.push("#saveBtn");
+  if (!refreshBtn) missing.push("#refreshBtn");
+  if (!statusEl) missing.push("#status");
+  if (!submissionsEl) missing.push("#submissions");
+
+  if (missing.length) {
+    throw new Error(`Missing required elements: ${missing.join(", ")}`);
+  }
+}
+
 function formatDriverWithTeam(driver) {
   const team = DRIVER_TEAMS_2026[driver];
   return team ? `${team} — ${driver}` : driver;
+}
+
+function getTeamClassName(team) {
+  return `team-${team
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")}`;
+}
+
+function formatSupabaseError(error, action) {
+  if (!error) return `${action} failed.`;
+
+  const tableMissing =
+    error.code === "42P01" ||
+    error.status === 404 ||
+    String(error.message || "").toLowerCase().includes("not found");
+
+  if (tableMissing) {
+    return "Database table not found. Run supabase.sql in your Supabase SQL Editor, then refresh.";
+  }
+
+  return `${action} failed: ${error.message}`;
 }
 
 function initSupabase() {
@@ -106,7 +148,7 @@ function initSupabase() {
     return;
   }
 
-  supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 
 function setupRaceOptions() {
@@ -115,25 +157,51 @@ function setupRaceOptions() {
 
 function setupDriverInputs() {
   driversGrid.innerHTML = DRIVERS_2026.map((driver) => {
+    const team = DRIVER_TEAMS_2026[driver] || "Unknown Team";
+    const teamClassName = getTeamClassName(team);
+
     return `
-      <div class="driver-row">
-        <span>${formatDriverWithTeam(driver)}</span>
-        <input type="number" min="1" max="${DRIVER_COUNT}" data-driver="${driver}" placeholder="Pos" required />
+      <div class="driver-row ${teamClassName}" draggable="true" data-driver="${driver}">
+        <span class="driver-pos"></span>
+        <span class="driver-label">${formatDriverWithTeam(driver)}</span>
+        <span class="driver-controls">
+          <button type="button" class="move-btn" data-move="up" aria-label="Move ${driver} up">▲</button>
+          <button type="button" class="move-btn" data-move="down" aria-label="Move ${driver} down">▼</button>
+          <span class="drag-handle" aria-hidden="true">⋮⋮</span>
+        </span>
       </div>
     `;
   }).join("");
+
+  refreshPositionBadges();
+}
+
+function refreshPositionBadges() {
+  const cards = Array.from(driversGrid.querySelectorAll(".driver-row[data-driver]"));
+
+  cards.forEach((card, index) => {
+    const badge = card.querySelector(".driver-pos");
+    if (badge) {
+      badge.textContent = `P${index + 1}`;
+    }
+  });
 }
 
 function collectPredictions() {
-  const inputs = Array.from(driversGrid.querySelectorAll("input[data-driver]"));
+  const cards = Array.from(driversGrid.querySelectorAll(".driver-row[data-driver]"));
   const predictions = {};
 
-  for (const input of inputs) {
-    const driver = input.getAttribute("data-driver");
-    const value = Number(input.value);
+  if (cards.length !== DRIVER_COUNT) {
+    throw new Error("Driver list is incomplete. Refresh the page and try again.");
+  }
 
-    if (!Number.isInteger(value) || value < 1 || value > DRIVER_COUNT) {
-      throw new Error(`Invalid position for ${driver}. Use a number from 1 to ${DRIVER_COUNT}.`);
+  for (let index = 0; index < cards.length; index += 1) {
+    const card = cards[index];
+    const driver = card.getAttribute("data-driver");
+    const value = index + 1;
+
+    if (!driver) {
+      throw new Error("A driver card is missing data. Refresh the page and try again.");
     }
 
     predictions[driver] = value;
@@ -142,15 +210,115 @@ function collectPredictions() {
   return predictions;
 }
 
-function resetPositionInputs() {
-  const inputs = driversGrid.querySelectorAll("input[data-driver]");
-  inputs.forEach((input) => {
-    input.value = "";
+function getDragAfterElement(container, y) {
+  const draggableElements = Array.from(
+    container.querySelectorAll(".driver-row[data-driver]:not(.dragging)")
+  );
+
+  return draggableElements.reduce(
+    (closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+
+      if (offset < 0 && offset > closest.offset) {
+        return { offset, element: child };
+      }
+
+      return closest;
+    },
+    { offset: Number.NEGATIVE_INFINITY, element: null }
+  ).element;
+}
+
+function moveCardByOffset(card, offset) {
+  if (!(card instanceof HTMLElement)) {
+    return;
+  }
+
+  const sibling = offset < 0 ? card.previousElementSibling : card.nextElementSibling;
+
+  if (!(sibling instanceof HTMLElement)) {
+    return;
+  }
+
+  if (offset < 0) {
+    driversGrid.insertBefore(card, sibling);
+  } else {
+    driversGrid.insertBefore(sibling, card);
+  }
+
+  refreshPositionBadges();
+  statusEl.textContent = "Order updated. Drag cards or use arrows to rank all drivers.";
+}
+
+function setupDragAndDrop() {
+  driversGrid.addEventListener("click", (event) => {
+    const target = event.target;
+
+    if (!(target instanceof HTMLElement) || !target.classList.contains("move-btn")) {
+      return;
+    }
+
+    const card = target.closest(".driver-row");
+    const moveDirection = target.getAttribute("data-move");
+
+    if (!card || !moveDirection) {
+      return;
+    }
+
+    moveCardByOffset(card, moveDirection === "up" ? -1 : 1);
+  });
+
+  driversGrid.addEventListener("dragstart", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.classList.contains("driver-row")) {
+      return;
+    }
+
+    draggedCard = target;
+    target.classList.add("dragging");
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", target.getAttribute("data-driver") || "");
+    }
+  });
+
+  driversGrid.addEventListener("dragend", () => {
+    if (!draggedCard) {
+      return;
+    }
+
+    draggedCard.classList.remove("dragging");
+    draggedCard = null;
+    refreshPositionBadges();
+  });
+
+  driversGrid.addEventListener("dragover", (event) => {
+    event.preventDefault();
+
+    if (!draggedCard) {
+      return;
+    }
+
+    const afterElement = getDragAfterElement(driversGrid, event.clientY);
+
+    if (!afterElement) {
+      driversGrid.appendChild(draggedCard);
+      return;
+    }
+
+    driversGrid.insertBefore(draggedCard, afterElement);
+  });
+
+  driversGrid.addEventListener("drop", (event) => {
+    event.preventDefault();
+    refreshPositionBadges();
+    statusEl.textContent = "Order updated. Drag cards or use arrows to rank all drivers.";
   });
 }
 
 async function savePrediction() {
-  if (!supabase) {
+  if (!supabaseClient) {
     statusEl.textContent = "Supabase is not configured yet.";
     return;
   }
@@ -175,7 +343,7 @@ async function savePrediction() {
   saveBtn.disabled = true;
   statusEl.textContent = "Saving...";
 
-  const { error } = await supabase.from("predictions").insert([
+  const { error } = await supabaseClient.from("predictions").insert([
     {
       user_name: userName,
       race_name: raceName,
@@ -186,12 +354,11 @@ async function savePrediction() {
   saveBtn.disabled = false;
 
   if (error) {
-    statusEl.textContent = `Failed to save: ${error.message}`;
+    statusEl.textContent = formatSupabaseError(error, "Save");
     return;
   }
 
   statusEl.textContent = "Prediction saved.";
-  resetPositionInputs();
   await loadSubmissions();
 }
 
@@ -204,8 +371,11 @@ function renderSubmissions(rows) {
   submissionsEl.innerHTML = rows.map((row) => {
     const ordered = Object.entries(row.predictions || {})
       .sort((a, b) => a[1] - b[1])
-      .slice(0, 5)
-      .map(([driver, pos]) => `<li>P${pos}: ${formatDriverWithTeam(driver)}</li>`)
+      .map(([driver, pos]) => {
+        const team = DRIVER_TEAMS_2026[driver] || "Unknown Team";
+        const teamClassName = getTeamClassName(team);
+        return `<li class="prediction-item ${teamClassName}">P${pos}: ${formatDriverWithTeam(driver)}</li>`;
+      })
       .join("");
 
     const date = new Date(row.created_at).toLocaleString();
@@ -224,28 +394,44 @@ function renderSubmissions(rows) {
 }
 
 async function loadSubmissions() {
-  if (!supabase) return;
+  if (!supabaseClient) return;
 
   submissionsEl.innerHTML = "<p class='hint'>Loading...</p>";
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseClient
     .from("predictions")
     .select("id, user_name, race_name, predictions, created_at")
     .order("created_at", { ascending: false })
     .limit(50);
 
   if (error) {
-    submissionsEl.innerHTML = `<p class='hint'>Failed to load: ${error.message}</p>`;
+    submissionsEl.innerHTML = `<p class='hint'>${formatSupabaseError(error, "Load")}</p>`;
     return;
   }
 
   renderSubmissions(data || []);
 }
 
-saveBtn.addEventListener("click", savePrediction);
-refreshBtn.addEventListener("click", loadSubmissions);
+function bootstrapApp() {
+  validateDomBindings();
 
-setupRaceOptions();
-setupDriverInputs();
-initSupabase();
-loadSubmissions();
+  saveBtn.addEventListener("click", savePrediction);
+  refreshBtn.addEventListener("click", loadSubmissions);
+
+  setupRaceOptions();
+  setupDriverInputs();
+  setupDragAndDrop();
+  initSupabase();
+  loadSubmissions();
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  try {
+    bootstrapApp();
+  } catch (error) {
+    console.error("App bootstrap failed:", error);
+    if (statusEl) {
+      statusEl.textContent = `Startup error: ${error.message}`;
+    }
+  }
+});
