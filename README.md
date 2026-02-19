@@ -1,65 +1,78 @@
 # F1 2026 Predictions
 
-Simple web app where friends can submit Formula 1 race predictions and view saved submissions.
+Community pick'em app where users rank all drivers for each 2026 Formula 1 race and store submissions in Supabase.
 
-## Features
+## Live Features
 
-- Submit predictions for every race in the 2026 season
-- Include finishing position per driver for the full grid
-- Persist data in Supabase so entries are available later
-- View latest saved predictions in the app
-- Deploy as a static website for free
+- Full 2026 race list and driver lineup
+- Drag-and-drop ranking cards for all drivers
+- Arrow controls (up/down) for quick reordering on desktop and mobile
+- Team color accents on ranking cards and saved results
+- Persistent storage in Supabase (PostgreSQL)
+- Saved prediction history shown in-app (full ranking, not only top 5)
 
-## Tech Stack
+## Stack
 
 - Frontend: HTML, CSS, vanilla JavaScript
-- Database: Supabase (PostgreSQL + Row Level Security)
-- Hosting: Vercel (free tier)
-
-## Quick Start
-
-### 1) Create Supabase project
-
-1. Create a free project at https://supabase.com
-2. Open SQL Editor and run [supabase.sql](supabase.sql)
-3. In Project Settings > API, copy:
-   - Project URL
-   - anon public key
-
-### 2) Configure app keys
-
-Edit [app.js](app.js) and replace:
-
-- `YOUR_SUPABASE_URL`
-- `YOUR_SUPABASE_ANON_KEY`
-
-### 3) Run locally (optional)
-
-Use VS Code Live Server or any static file server to preview the app.
-
-## Deploy for Free (Vercel)
-
-1. Push the project to GitHub
-2. Create/import project in Vercel: https://vercel.com
-3. Deploy with default settings (no build step required)
-
-## Database Schema
-
-Each submission stores:
-
-- `user_name`
-- `race_name`
-- `predictions` (JSON: driver -> position)
-- `created_at`
+- Database/API: Supabase (PostgreSQL + Row Level Security)
+- Hosting: Vercel (static deployment)
 
 ## Project Structure
 
-- [index.html](index.html) main page markup
-- [styles.css](styles.css) app styling
-- [app.js](app.js) UI logic + Supabase integration
-- [supabase.sql](supabase.sql) database table + policies
+- [index.html](index.html): page layout
+- [styles.css](styles.css): styling and team colors
+- [app.js](app.js): prediction UI logic and Supabase calls
+- [supabase.sql](supabase.sql): table + RLS policies
+
+## Local Setup
+
+### 1) Create Supabase project
+
+1. Create a project at https://supabase.com
+2. Open SQL Editor
+3. Run the script from [supabase.sql](supabase.sql)
+
+### 2) Configure API values
+
+In [app.js](app.js), set:
+
+- `SUPABASE_URL` (for example: `https://your-project-ref.supabase.co`)
+- `SUPABASE_ANON_KEY` (anon public key from Project Settings > API)
+
+### 3) Run locally
+
+Open with VS Code Live Server (or any static server) and test by submitting a prediction.
+
+## Deploy on Vercel
+
+1. Push this repository to GitHub
+2. Import the repository in Vercel: https://vercel.com/new
+3. Keep defaults (no build command, no output directory)
+4. Deploy
+
+## Update Workflow (Auto Deploy)
+
+After the project is connected to Vercel, every push to your production branch deploys automatically.
+
+Typical update flow:
+
+1. `git add .`
+2. `git commit -m "Describe your change"`
+3. `git push`
+
+Vercel then creates a new deployment for that commit.
+
+## Database Model
+
+Table: `public.predictions`
+
+- `id` (identity primary key)
+- `user_name` (text)
+- `race_name` (text)
+- `predictions` (jsonb: `driver -> finishing position`)
+- `created_at` (timestamp with timezone)
 
 ## Notes
 
-- The app currently allows multiple submissions per user/race combination.
-- Update race and driver arrays in [app.js](app.js) when season data changes.
+- This app currently allows multiple submissions per user and race.
+- Update race, driver, and team mappings in [app.js](app.js) when season data changes.
